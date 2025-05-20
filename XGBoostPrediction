@@ -1,0 +1,78 @@
+import pandas as pd
+import json
+import numpy as np
+import xgboost as xgb
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MultiLabelBinarizer
+from collections import Counter
+
+# Load and process the dataset
+file_path = "Lottonumbers_tidy_complete.json"  # Update path if needed
+
+# Read the JSON file
+with open(file_path, "r") as file:
+    data = json.load(file)
+
+# Convert to DataFrame
+df = pd.DataFrame(data)
+
+# Convert date to datetime format
+df["date"] = pd.to_datetime(df["date"], format="%d.%m.%Y")
+
+# Sort data by date (most recent first) and take the last 30 draws
+df_recent = df.sort_values("date", ascending=False).head(30)
+
+# Prepare Data for Machine Learning
+df_grouped = df_recent.groupby("date")["value"].apply(list).reset_index()
+
+# Convert numbers into binary format using MultiLabelBinarizer
+mlb = MultiLabelBinarizer()
+X = mlb.fit_transform(df_grouped["value"])
+
+# Generate labels (next draw)
+y = np.roll(X, shift=-1, axis=0)[:-1]  # Shift by one to predict the next outcome
+X = X[:-1]  # Remove last row to align with y
+
+# Split into training and testing data
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Train XGBoost Model
+model = xgb.XGBClassifier(n_estimators=100, use_label_encoder=False, eval_metric="logloss", random_state=42)
+model.fit(X_train, y_train)
+
+# Predict the next draw probabilities
+next_draw_probs = model.predict_proba(X_test[-1].reshape(1, -1))
+
+# Extract top 10 predicted numbers (for variations)
+probabilities = next_draw_probs[0]
+predicted_indices = np.argsort(probabilities)[-10:][::-1]  # Top 10 highest probabilities
+top_numbers = mlb.classes_[predicted_indices]
+
+# Convert to 1D NumPy array
+top_numbers = np.array(top_numbers).flatten()
+
+# Ensure at least 5 numbers are always picked
+def fill_numbers(numbers, backup_source, size=5):
+    """Ensure we always have 'size' numbers by adding from backup if needed."""
+    missing = size - len(numbers)
+    if missing > 0:
+        extra_numbers = [num for num in backup_source if num not in numbers][:missing]
+        numbers = list(numbers) + extra_numbers
+    return sorted(numbers)
+
+# Get the top 10 most frequent numbers for backup
+lotto_freq = df_recent["value"].value_counts().reset_index()
+lotto_freq.columns = ["number", "count"]
+top_historical_numbers = lotto_freq["number"].head(10).values
+
+# Generate 3 different 5-number combinations
+combination_1 = fill_numbers(top_numbers[:5], top_historical_numbers)
+combination_2 = fill_numbers(np.random.choice(top_numbers, min(5, len(top_numbers)), replace=False), top_historical_numbers)
+combination_3 = fill_numbers(np.random.choice(top_historical_numbers, 5, replace=False), top_historical_numbers)
+
+# Print results
+print("\nPredicted 3 Lotto Number Combinations (Last 30 Draws + XGBoost):")
+print(f"Combination 1 (Top XGBoost Picks): {combination_1}")
+print(f"Combination 2 (Random from Top Predictions): {combination_2}")
+print(f"Combination 3 (Historical Trends): {combination_3}")
